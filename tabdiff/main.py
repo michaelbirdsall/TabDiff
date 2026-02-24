@@ -58,7 +58,12 @@ def main(args):
     num_samples_to_generate = None
     ckpt_path = None
     if args.mode == 'train':
-        print("NEW training is started")
+        # Support resuming from checkpoint in train mode
+        if args.ckpt_path is not None:
+            ckpt_path = args.ckpt_path
+            print(f"RESUMING training from checkpoint: {ckpt_path}")
+        else:
+            print("NEW training is started")
     elif args.mode == 'test':
         num_samples_to_generate = args.num_samples_to_generate
         ckpt_path = args.ckpt_path

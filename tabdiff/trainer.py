@@ -3,6 +3,7 @@ import glob
 import time
 import torch
 from torch.optim.lr_scheduler import ReduceLROnPlateau
+from torch.cuda.amp import autocast, GradScaler
 import numpy as np
 import pandas as pd
 import json
@@ -36,9 +37,12 @@ class Trainer:
             device=torch.device('cuda:1'),
             ckpt_path = None,
             y_only=False,
+            use_amp=True,
             **kwargs
     ):
         self.y_only = y_only
+        self.use_amp = use_amp
+        self.scaler = GradScaler() if use_amp else None
         self.diffusion = diffusion
         self.ema_model = deepcopy(self.diffusion._denoise_fn)
         for param in self.ema_model.parameters():
@@ -58,7 +62,7 @@ class Trainer:
         self.optimizer = torch.optim.AdamW(self.diffusion.parameters(), lr=lr, weight_decay=weight_decay)
         self.ema_decay = ema_decay
         self.lr_scheduler = lr_scheduler
-        self.scheduler = ReduceLROnPlateau(self.optimizer, mode='min', factor=factor, patience=reduce_lr_patience, verbose=True)
+        self.scheduler = ReduceLROnPlateau(self.optimizer, mode='min', factor=factor, patience=reduce_lr_patience)
         self.closs_weight_schedule = closs_weight_schedule
         self.c_lambda = c_lambda
         self.d_lambda = d_lambda
@@ -96,11 +100,19 @@ class Trainer:
 
         self.optimizer.zero_grad()
 
-        dloss, closs = self.diffusion.mixed_loss(x)
-
-        loss = dloss_weight * dloss + closs_weight * closs
-        loss.backward()
-        self.optimizer.step()
+        if self.use_amp:
+            with autocast():
+                dloss, closs = self.diffusion.mixed_loss(x)
+                loss = dloss_weight * dloss + closs_weight * closs
+            
+            self.scaler.scale(loss).backward()
+            self.scaler.step(self.optimizer)
+            self.scaler.update()
+        else:
+            dloss, closs = self.diffusion.mixed_loss(x)
+            loss = dloss_weight * dloss + closs_weight * closs
+            loss.backward()
+            self.optimizer.step()
 
         return dloss, closs
     
@@ -273,13 +285,13 @@ class Trainer:
                 torch.save(state_dicts, os.path.join(self.model_save_path, f'model_{epoch+1}.pt'))
                 
                 print_with_bar(f"Routine Generation Evaluation every {self.check_val_every}, currently at epoch #{epoch+1}, wiht total_loss={total_loss}.")
-                out_metrics, _, _ = self.evaluate_generation(save_metric_details=True, plot_density=True)
+                out_metrics, _, _ = self.evaluate_generation(save_metric_details=True, plot_density=False)  # Disabled plotting to avoid column name issues
                 log_dict.update(out_metrics)
                 print(f"Eval Resutls of the Non-EMA model:\n {out_metrics}")
 
                 # Evaluate the EMA model
                 torch.save(self.ema_model.state_dict(), os.path.join(self.model_save_path, f'ema_model_{epoch+1}.pt'))
-                ema_out_metrics, _, _ = self.evaluate_generation(ema=True, save_metric_details=True, plot_density=True)
+                ema_out_metrics, _, _ = self.evaluate_generation(ema=True, save_metric_details=True, plot_density=False)
                 log_dict.update({
                     "ema": ema_out_metrics,
                 })
@@ -577,10 +589,11 @@ def split_num_cat_target(syn_data, info, num_inverse, int_inverse, cat_inverse):
     n_num_feat = len(num_col_idx)
     n_cat_feat = len(cat_col_idx)
 
-    if task_type == 'regression':
-        n_num_feat += len(target_col_idx)
-    else:
-        n_cat_feat += len(target_col_idx)
+    if target_col_idx is not None:  # Handle case when there's no target
+        if task_type == 'regression':
+            n_num_feat += len(target_col_idx)
+        else:
+            n_cat_feat += len(target_col_idx)
 
     syn_num = syn_data[:, :n_num_feat]
     syn_cat = syn_data[:, n_num_feat:]
@@ -589,11 +602,12 @@ def split_num_cat_target(syn_data, info, num_inverse, int_inverse, cat_inverse):
     syn_num = int_inverse(syn_num).astype(np.float32)
     syn_cat = cat_inverse(syn_cat)
 
-
-    if info['task_type'] == 'regression':
+    # Handle case when there's no target variable
+    if target_col_idx is None:
+        syn_target = None
+    elif info['task_type'] == 'regression':
         syn_target = syn_num[:, :len(target_col_idx)]
         syn_num = syn_num[:, len(target_col_idx):]
-    
     else:
         print(syn_cat.shape)
         syn_target = syn_cat[:, :len(target_col_idx)]
@@ -612,9 +626,12 @@ def recover_data(syn_num, syn_cat, syn_target, info):
     idx_mapping = {int(key): value for key, value in idx_mapping.items()}
 
     syn_df = pd.DataFrame()
+    
+    # Handle None target_col_idx
+    n_target = len(target_col_idx) if target_col_idx is not None else 0
 
     if info['task_type'] == 'regression':
-        for i in range(len(num_col_idx) + len(cat_col_idx) + len(target_col_idx)):
+        for i in range(len(num_col_idx) + len(cat_col_idx) + n_target):
             if i in set(num_col_idx):
                 syn_df[i] = syn_num[:, idx_mapping[i]] 
             elif i in set(cat_col_idx):
@@ -624,7 +641,7 @@ def recover_data(syn_num, syn_cat, syn_target, info):
 
 
     else:
-        for i in range(len(num_col_idx) + len(cat_col_idx) + len(target_col_idx)):
+        for i in range(len(num_col_idx) + len(cat_col_idx) + n_target):
             if i in set(num_col_idx):
                 syn_df[i] = syn_num[:, idx_mapping[i]]
             elif i in set(cat_col_idx):

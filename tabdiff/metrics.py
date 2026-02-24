@@ -270,10 +270,11 @@ def reorder(real_data, syn_data, info):
     target_col_idx = deepcopy(info['target_col_idx'])
 
     task_type = info['task_type']
-    if task_type == 'regression':
-        num_col_idx += target_col_idx
-    else:
-        cat_col_idx += target_col_idx
+    if target_col_idx is not None:
+        if task_type == 'regression':
+            num_col_idx += target_col_idx
+        else:
+            cat_col_idx += target_col_idx
 
     real_num_data = real_data[num_col_idx]
     real_cat_data = real_data[cat_col_idx]
