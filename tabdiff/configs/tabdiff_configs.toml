@@ -6,12 +6,12 @@ dequant_dist = "none"
 int_dequant_factor = 0
 
 [unimodmlp_params]
-num_layers = 8
-d_token = 256
-n_head = 8
-factor = 48
+num_layers = 4
+d_token = 64
+n_head = 2
+factor = 4
 bias = true
-dim_t = 2048
+dim_t = 256
 use_mlp = true
 
 [diffusion_params]
@@ -46,11 +46,11 @@ k_offset = 1.0
 
 [train.main]
 steps = 2000
-lr = 0.0005
+lr = 0.001
 weight_decay = 0.01
-ema_decay = 0.9995
-batch_size = 8192
-check_val_every = 500
+ema_decay = 0.9997
+batch_size = 512
+check_val_every = 100
 lr_scheduler = "reduce_lr_on_plateau"
 factor = 0.90
 reduce_lr_patience = 50
