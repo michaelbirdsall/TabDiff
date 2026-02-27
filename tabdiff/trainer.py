@@ -275,7 +275,7 @@ class Trainer:
                 }
                 torch.save(state_dicts, os.path.join(self.model_save_path, f'best_ema_model_{np.round(ema_total_loss,4)}_{epoch+1}.pt'))
             
-            # Evaluate Sample Quality
+            # Save periodic checkpoints (generation eval disabled - run validate_synthetic.py after training)
             if (epoch+1) % self.check_val_every == 0:
                 state_dicts = {
                     'denoise_fn': self.diffusion._denoise_fn.state_dict(), 
@@ -283,19 +283,8 @@ class Trainer:
                     'cat_schedule': self.diffusion.cat_schedule.state_dict(),
                 }
                 torch.save(state_dicts, os.path.join(self.model_save_path, f'model_{epoch+1}.pt'))
-                
-                print_with_bar(f"Routine Generation Evaluation every {self.check_val_every}, currently at epoch #{epoch+1}, wiht total_loss={total_loss}.")
-                out_metrics, _, _ = self.evaluate_generation(save_metric_details=True, plot_density=False)  # Disabled plotting to avoid column name issues
-                log_dict.update(out_metrics)
-                print(f"Eval Resutls of the Non-EMA model:\n {out_metrics}")
-
-                # Evaluate the EMA model
                 torch.save(self.ema_model.state_dict(), os.path.join(self.model_save_path, f'ema_model_{epoch+1}.pt'))
-                ema_out_metrics, _, _ = self.evaluate_generation(ema=True, save_metric_details=True, plot_density=False)
-                log_dict.update({
-                    "ema": ema_out_metrics,
-                })
-                print(f"Eval Resutls of the EMA model:\n {ema_out_metrics}")
+                print_with_bar(f"Checkpoint saved at epoch #{epoch+1}, total_loss={total_loss}.")
             
             # Submit logs
             self.logger.log(log_dict)
